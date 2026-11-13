@@ -328,7 +328,22 @@ app.post(['/api', '/api/*'], async (req, res) => {
       namespaces: [
         {
           autoGenerate: true,
-          ns: "llm-deepseek-api-key",
+          ns: "ui-settings-general",
+          schema: { type: "object", dict: {} },
+          value: {
+            welcomeNoticeVersion: "2026-09-28.1"
+          },
+          base: {},
+          user: {
+            welcomeNoticeVersion: "2026-09-28.1"
+          },
+          applies: "live",
+          secrets: [],
+          revision: 1
+        },
+        {
+          autoGenerate: true,
+          ns: "llm-deepseek",
           schema: { type: "object", dict: {} },
           value: {},
           base: {},
@@ -375,7 +390,7 @@ app.post(['/api', '/api/*'], async (req, res) => {
   }
   // 11. Settings: mutate / write
   else if (endpoint.includes("settings/mutate") || endpoint.includes("settings.mutate") || endpoint.includes("settings/replace") || endpoint.includes("settings/update")) {
-    const targetNs = payload?.ns || payload?.args?.[0] || "llm-pi-ai";
+    const targetNs = payload?.ns || payload?.args?.[0] || "ui-settings-general";
     const piAiSchema = {
       type: "object",
       dict: {
@@ -409,13 +424,14 @@ app.post(['/api', '/api/*'], async (req, res) => {
         }
       }
     };
+    const val = targetNs === "ui-settings-general" ? { welcomeNoticeVersion: "2026-09-28.1" } : { providers: {} };
     value = {
       autoGenerate: true,
       ns: targetNs,
       schema: targetNs === "llm-pi-ai" ? piAiSchema : { type: "object", dict: {} },
-      value: { providers: {} },
+      value: val,
       base: {},
-      user: { providers: {} },
+      user: val,
       applies: "live",
       secrets: [],
       revision: 2
@@ -464,7 +480,7 @@ app.post(['/api', '/api/*'], async (req, res) => {
       {
         provider: "deepseek-official",
         displayName: "DeepSeek",
-        settingsNs: "llm-deepseek-api-key",
+        settingsNs: "llm-deepseek",
         settingsPath: []
       },
       {
