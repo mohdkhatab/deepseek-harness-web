@@ -1,0 +1,16 @@
+{
+  "name": "deepseek-harness-web",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness Official Web UI with Custom Models Support for Render Deployment",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
