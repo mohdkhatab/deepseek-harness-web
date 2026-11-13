@@ -275,18 +275,271 @@ app.post(['/api', '/api/*'], async (req, res) => {
   else if (endpoint.includes("session/events") || endpoint.includes("session.events")) {
     value = { records: [], hasMore: false };
   }
-  // 10. LLM Providers
+  // 10. Settings: describe (Populates the Settings -> Models view!)
+  else if (endpoint.includes("settings/describe") || endpoint.includes("settings.describe")) {
+    const piAiSchema = {
+      type: "object",
+      dict: {
+        providers: {
+          type: "dict",
+          inner: {
+            type: "object",
+            dict: {
+              api: {
+                type: "union",
+                list: [
+                  { value: "openai-completions" },
+                  { value: "openai-responses" },
+                  { value: "anthropic-messages" }
+                ]
+              },
+              apiKeyEnv: { type: "string" },
+              baseUrl: { type: "string" },
+              models: {
+                type: "array",
+                inner: {
+                  type: "object",
+                  dict: {
+                    id: { type: "string" },
+                    name: { type: "string" },
+                    reasoningEfforts: {
+                      type: "dict",
+                      sKey: {
+                        type: "union",
+                        list: [
+                          { value: "low" },
+                          { value: "medium" },
+                          { value: "high" }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    value = {
+      writable: true,
+      hasDocument: true,
+      namespaces: [
+        {
+          autoGenerate: true,
+          ns: "llm-deepseek-api-key",
+          schema: { type: "object", dict: {} },
+          value: {},
+          base: {},
+          user: {},
+          applies: "live",
+          secrets: [],
+          revision: 1
+        },
+        {
+          autoGenerate: true,
+          ns: "llm-pi-ai",
+          schema: piAiSchema,
+          value: {
+            providers: {
+              custom: {
+                api: "openai-completions",
+                apiKeyEnv: "CUSTOM_API_KEY",
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  { id: "custom-model", name: "Custom Model" }
+                ]
+              }
+            }
+          },
+          base: {},
+          user: {
+            providers: {
+              custom: {
+                api: "openai-completions",
+                apiKeyEnv: "CUSTOM_API_KEY",
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  { id: "custom-model", name: "Custom Model" }
+                ]
+              }
+            }
+          },
+          applies: "live",
+          secrets: [],
+          revision: 1
+        }
+      ]
+    };
+  }
+  // 11. Settings: mutate / write
+  else if (endpoint.includes("settings/mutate") || endpoint.includes("settings.mutate") || endpoint.includes("settings/replace") || endpoint.includes("settings/update")) {
+    const targetNs = payload?.ns || payload?.args?.[0] || "llm-pi-ai";
+    const piAiSchema = {
+      type: "object",
+      dict: {
+        providers: {
+          type: "dict",
+          inner: {
+            type: "object",
+            dict: {
+              api: {
+                type: "union",
+                list: [
+                  { value: "openai-completions" },
+                  { value: "openai-responses" },
+                  { value: "anthropic-messages" }
+                ]
+              },
+              apiKeyEnv: { type: "string" },
+              baseUrl: { type: "string" },
+              models: {
+                type: "array",
+                inner: {
+                  type: "object",
+                  dict: {
+                    id: { type: "string" },
+                    name: { type: "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+    value = {
+      autoGenerate: true,
+      ns: targetNs,
+      schema: targetNs === "llm-pi-ai" ? piAiSchema : { type: "object", dict: {} },
+      value: { providers: {} },
+      base: {},
+      user: { providers: {} },
+      applies: "live",
+      secrets: [],
+      revision: 2
+    };
+  }
+  // 12. Settings: openSettingsDocument
+  else if (endpoint.includes("openSettingsDocument")) {
+    value = { opened: true };
+  }
+  // 13. Credentials: describe (Zod strictly requires configured: boolean and writable: boolean)
+  else if (endpoint.includes("credentials/describe") || endpoint.includes("credentials.describe")) {
+    const rawRefs = Array.isArray(payload) ? payload : (Array.isArray(payload?.refs) ? payload.refs : (Array.isArray(payload?.args?.[0]) ? payload.args[0] : []));
+    const requestedRefs = rawRefs.length > 0 ? rawRefs : [
+      "DEEPSEEK_OFFICIAL_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "CUSTOM_API_KEY"
+    ];
+    const credMap = {};
+    for (const r of requestedRefs) {
+      credMap[r] = {
+        configured: true,
+        source: "env",
+        writable: true
+      };
+    }
+    value = credMap;
+  }
+  // 14. Credentials: set (returns void in Zod schema)
+  else if (endpoint.includes("credentials/set") || endpoint.includes("credentials.set")) {
+    const ref = payload?.ref || payload?.args?.[0] || "KEY";
+    const val = payload?.value || payload?.args?.[1] || "";
+    console.log(`[Credentials] Saved API Key for: ${ref}`);
+    value = undefined;
+  }
+  // 15. Credentials: unset (returns void in Zod schema)
+  else if (endpoint.includes("credentials/unset") || endpoint.includes("credentials.unset")) {
+    const ref = payload?.ref || payload?.args?.[0] || "KEY";
+    console.log(`[Credentials] Unset API Key for: ${ref}`);
+    value = undefined;
+  }
+  // 16. LLM: Configurable Providers Directory
+  else if (endpoint.includes("llm/listConfigurableProviders")) {
+    value = [
+      {
+        provider: "deepseek-official",
+        displayName: "DeepSeek",
+        settingsNs: "llm-deepseek-api-key",
+        settingsPath: []
+      },
+      {
+        provider: "custom",
+        displayName: "Custom Model API",
+        settingsNs: "llm-pi-ai",
+        settingsPath: ["providers", "custom"],
+        declared: true
+      },
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        settingsNs: "llm-pi-ai",
+        settingsPath: ["providers", "openai"],
+        declared: false
+      },
+      {
+        provider: "anthropic",
+        displayName: "Anthropic",
+        settingsNs: "llm-pi-ai",
+        settingsPath: ["providers", "anthropic"],
+        declared: false
+      }
+    ];
+  }
+  // 17. LLM: Registered Providers
   else if (endpoint.includes("llm/listProviders") || endpoint.includes("listProviders")) {
     value = [
-      { id: "deepseek", name: "DeepSeek" },
-      { id: "custom", name: "Custom Models" }
+      { id: "deepseek-official", name: "DeepSeek" },
+      { id: "custom", name: "Custom Model API" },
+      { id: "openai", name: "OpenAI" },
+      { id: "anthropic", name: "Anthropic" }
     ];
-  } else if (endpoint.includes("llm/listConfigurableProviders")) {
-    value = [];
-  } else if (endpoint.includes("models") || endpoint.includes("model")) {
+  }
+  // 18. LLM: Discover Models (interrogate endpoint)
+  else if (endpoint.includes("discoverModels")) {
+    value = [
+      { id: "deepseek-chat", name: "DeepSeek-V3" },
+      { id: "deepseek-reasoner", name: "DeepSeek-R1 (Reasoner)" },
+      { id: "gpt-4o", name: "GPT-4o" },
+      { id: "gpt-4o-mini", name: "GPT-4o Mini" },
+      { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet" }
+    ];
+  }
+  // 19. Session: modelCatalog (Populates chat model picker)
+  else if (endpoint.includes("modelCatalog")) {
+    value = {
+      default: {
+        provider: "deepseek-official",
+        model: "deepseek-chat"
+      },
+      routableProviders: ["deepseek-official", "custom"],
+      groups: [
+        {
+          id: "deepseek-official",
+          name: "DeepSeek",
+          models: [
+            { id: "deepseek-chat", name: "DeepSeek-V3" },
+            { id: "deepseek-reasoner", name: "DeepSeek-R1 (Reasoner)" }
+          ]
+        },
+        {
+          id: "custom",
+          name: "Custom Models",
+          models: customModels.map(m => ({ id: m.id, name: m.name || m.id }))
+        }
+      ],
+      failures: []
+    };
+  }
+  // 20. Models catalog
+  else if (endpoint.includes("models") || endpoint.includes("model")) {
     value = customModels;
   }
-  // 11. Account
+  // 21. Account
   else if (endpoint.includes("account")) {
     value = {
       id: "admin-user",
@@ -294,7 +547,7 @@ app.post(['/api', '/api/*'], async (req, res) => {
       type: "admin"
     };
   }
-  // 12. Chat Completion
+  // 18. Chat Completion Proxy
   else if (endpoint.includes("chat") || endpoint.includes("completion")) {
     try {
       const modelId = req.body?.payload?.model || customModels[0]?.id || "deepseek-chat";
