@@ -28,6 +28,8 @@ const customModels = [
     id: "deepseek-chat",
     name: "DeepSeek-V3",
     vendor: "DeepSeek",
+    contextWindow: 64000,
+    maxTokens: 8192,
     baseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
     apiKey: process.env.DEEPSEEK_API_KEY || ""
   },
@@ -35,6 +37,8 @@ const customModels = [
     id: "deepseek-reasoner",
     name: "DeepSeek-R1 (Reasoner)",
     vendor: "DeepSeek",
+    contextWindow: 64000,
+    maxTokens: 8192,
     baseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
     apiKey: process.env.DEEPSEEK_API_KEY || ""
   }
@@ -62,7 +66,7 @@ app.get('/api/custom-models', (req, res) => {
 });
 
 app.post('/api/custom-models', (req, res) => {
-  const { id, name, vendor, baseUrl, apiKey } = req.body;
+  const { id, name, vendor, baseUrl, apiKey, contextWindow, maxTokens } = req.body;
   if (!id || !name) {
     return res.status(400).json({ error: "id and name are required" });
   }
@@ -71,51 +75,79 @@ app.post('/api/custom-models', (req, res) => {
     existing.name = name;
     existing.vendor = vendor || existing.vendor;
     existing.baseUrl = baseUrl || existing.baseUrl;
-    if (apiKey) existing.apiKey = apiKey;
+    if (apiKey !== undefined) existing.apiKey = apiKey;
+    if (contextWindow) existing.contextWindow = Number(contextWindow);
+    if (maxTokens) existing.maxTokens = Number(maxTokens);
   } else {
     customModels.push({
       id,
       name,
       vendor: vendor || "Custom Provider",
-      baseUrl: baseUrl || "https://api.deepseek.com",
+      contextWindow: contextWindow ? Number(contextWindow) : 64000,
+      maxTokens: maxTokens ? Number(maxTokens) : 8192,
+      baseUrl: baseUrl || "https://api.openai.com/v1",
       apiKey: apiKey || ""
     });
   }
+  console.log(`[Custom Models] Saved model: ${name} (${id})`);
   res.json({ ok: true, message: `Model ${name} (${id}) saved successfully!`, models: customModels });
 });
 
 // RPC API Handler (for DeepSeek Harness web frontend)
 app.post(['/api', '/api/*'], async (req, res) => {
   const { rpcId = "rpc-default", method = "" } = req.body || {};
+  const pathPart = req.params[0] || "";
+  const endpoint = method || pathPart;
   let value = {};
 
-  if (method.includes("models") || method.includes("model")) {
+  if (endpoint.includes("session/list") || endpoint.includes("session.list")) {
+    value = { items: [] };
+  } else if (endpoint.includes("llm/listProviders") || endpoint.includes("listProviders")) {
+    value = [
+      { id: "deepseek", name: "DeepSeek" },
+      { id: "custom", name: "Custom Models" }
+    ];
+  } else if (endpoint.includes("llm/listConfigurableProviders")) {
+    value = [];
+  } else if (endpoint.includes("models") || endpoint.includes("model")) {
     value = customModels;
-  } else if (method.includes("workspace")) {
+  } else if (endpoint.includes("workspace")) {
     value = {
       id: "render-ws",
       name: "Render Cloud Workspace",
       path: "/app/workspace",
       state: "ready"
     };
-  } else if (method.includes("account")) {
+  } else if (endpoint.includes("account")) {
     value = {
       id: "admin-user",
       name: "Cloud Administrator",
       type: "admin"
     };
-  } else if (method.includes("session")) {
-    value = [];
-  } else if (method.includes("chat") || method.includes("completion")) {
+  } else if (endpoint.includes("chat") || endpoint.includes("completion")) {
     // LLM Chat proxy handler
     try {
-      const modelId = req.body?.payload?.model || "deepseek-chat";
+      const modelId = req.body?.payload?.model || customModels[0]?.id || "deepseek-chat";
       const modelConfig = customModels.find(m => m.id === modelId) || customModels[0];
       const targetUrl = (modelConfig.baseUrl || "https://api.deepseek.com").replace(/\/$/, '') + "/chat/completions";
       const key = modelConfig.apiKey || process.env.DEEPSEEK_API_KEY;
 
       if (!key) {
-        value = { error: "API key is not configured. Please set DEEPSEEK_API_KEY in Render environment settings." };
+        value = {
+          id: "chatcmpl-" + crypto.randomUUID(),
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Welcome to DeepSeek Harness Web! Your custom model runtime is connected and ready. You can add your API Key in Settings -> Models or in Render Environment Variables whenever you are ready."
+            },
+            finish_reason: "stop"
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 35, total_tokens: 45 }
+        };
       } else {
         const response = await fetch(targetUrl, {
           method: "POST",
@@ -151,7 +183,7 @@ const wss = new WebSocket.Server({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
   try {
-    const url = new URL(request.url, `http://${request.headers.host}`);
+    const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/api/remote.mux' || url.pathname.startsWith('/api')) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
@@ -164,30 +196,45 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  console.log(`[WebSocket] Client connected: ${req.url}`);
+
   ws.on('message', (message) => {
     try {
       const data = JSON.parse(message.toString());
+      console.log(`[WebSocket] Frame: type=${data.type}, endpoint=${data.endpoint || ''}, streamId=${data.streamId || ''}`);
+
       if (data.type === 'open') {
-        // Send remote ready handshake frame so connection indicator changes to connected
-        const readyFrame = {
-          type: "item",
-          streamId: data.streamId || "stream-1",
-          value: {
-            type: "ready",
-            clientId: "render-client-" + crypto.randomUUID().slice(0, 8),
-            host: {
-              home: "/app",
-              runtime: "render-cloud"
+        const streamId = data.streamId || "stream-1";
+        if (data.endpoint === '$events' || !data.endpoint) {
+          // STRICT frame format matching parseRemoteEventReady in bundle_phase1.js:
+          // { type: "item", streamId, value: { type: "ready", clientId: "...", host: { home: "/app" } } }
+          // host MUST contain ONLY "home" and nothing else!
+          const readyFrame = {
+            type: "item",
+            streamId: streamId,
+            value: {
+              type: "ready",
+              clientId: "render-client-" + crypto.randomUUID().slice(0, 8),
+              host: {
+                home: "/app"
+              }
             }
-          }
-        };
-        ws.send(JSON.stringify(readyFrame));
+          };
+          ws.send(JSON.stringify(readyFrame));
+          console.log('[WebSocket] Sent Remote ready confirmation frame to client');
+        } else {
+          // Complete any other streams cleanly so client does not hang
+          ws.send(JSON.stringify({
+            type: "end",
+            streamId: streamId
+          }));
+        }
       } else if (data.type === 'ping') {
         ws.send(JSON.stringify({ type: "pong", streamId: data.streamId }));
       }
     } catch (e) {
-      console.error("WS Message Error:", e.message);
+      console.error("[WebSocket] Frame Error:", e.message);
     }
   });
 
@@ -198,7 +245,10 @@ wss.on('connection', (ws) => {
     }
   }, 25000);
 
-  ws.on('close', () => clearInterval(pingInterval));
+  ws.on('close', () => {
+    console.log('[WebSocket] Client disconnected');
+    clearInterval(pingInterval);
+  });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
